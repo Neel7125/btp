@@ -1,0 +1,7 @@
+socket
+json
+platform
+psutil
+subprocess
+time
+numpy
