@@ -11,6 +11,7 @@ from deap import base, creator, tools, algorithms
 # ================= GLOBAL =================
 RESULT_DIR = "./Result"
 os.makedirs(RESULT_DIR, exist_ok=True)
+RESULT_FILE = os.path.join(RESULT_DIR, "final_results.txt")
 
 # ================= INPUT SIZE =================
 FRAME_SIZE_MB = 32.6
@@ -60,30 +61,14 @@ def generate_matrices():
     global TOTAL_FRAMES
     tasks = []
 
-    for i in range(50):
-        A = np.random.randint(1, 10, (3,3)).tolist()
-        B = np.random.randint(1, 10, (3,3)).tolist()
+    for i in range(100):
+        A = np.random.randint(1, 100, (5,5)).tolist()
+        B = np.random.randint(1, 100, (5,5)).tolist()
 
         tasks.append({"id": i, "A": A, "B": B})
 
     TOTAL_FRAMES = len(tasks)
     return tasks
-
-# ================= RESULT =================
-def create_result_file(device_id, name):
-    ip = devices[device_id]["ip"].replace(".", "_")
-
-    filename = f"{name.replace(' ', '_')}_{ip}_results.txt"
-    path = os.path.join(RESULT_DIR, filename)
-
-    device_result_files[device_id] = path
-
-    with open(path, "w") as f:
-        f.write("===== Scheduler Evaluation =====\n\n")
-
-def save_result(device_id, text):
-    with open(device_result_files[device_id], "a") as f:
-        f.write(text + "\n")
 
 # ================= OBJECTIVE =================
 def compute_objectives(assignment):
@@ -123,7 +108,7 @@ def print_task_distribution(assign):
 
     counts = Counter(assign)
 
-    print("\n📊 Task Distribution (Out of 50):\n")
+    print("\n📊 Task Distribution (Out of 100):\n")
 
     for i in range(NUM_DEVICES):
         device_name = devices[i]["name"]
@@ -317,24 +302,36 @@ def run_experiment():
     Twin = [0.1] * NUM_DEVICES
     Twex = [0.1] * NUM_DEVICES
 
-    for d in devices:
-        cpu = d["processor_speed"]
-        
-        # Faster CPU → lower processing time
-        proc_time = 1 / cpu
+    bandwidths = [54e6] * NUM_DEVICES  # or different per device if you want
 
-        Twin.append(random.uniform(0.05, 0.2))
-        Twex.append(random.uniform(0.05, 0.2))
+    for i, d in enumerate(devices):
+
+        # ✅ Processing time (from client benchmark)
+        proc_time = d["frame_processing_time"]
+
+        # ✅ Transmission time (based on matrix size)
+        Tt = FRAME_SIZE_BITS / bandwidths[i]
+
+        # ✅ Receiving time (assume same as transmit or slightly lower)
+        Tr = 0.8 * Tt
+
+        # ✅ Execution overhead (small constant)
+        Tex = 0.05
+
+        # ✅ Store values
+        Twin.append(Tr)
+        Twex.append(Tex)
         TTproc.append(proc_time)
-        Ttransmit.append(random.uniform(0.05, 0.2))
+        Ttransmit.append(Tt)
 
-        epsilon_recv.append(random.uniform(0.5, 1.5))
-        epsilon_proc.append(random.uniform(1.0, 2.0))
-        epsilon_send.append(random.uniform(0.5, 1.5))
+        # ✅ Energy model (proportional, NOT random)
+        epsilon_recv.append(0.2 * Tr)
+        epsilon_proc.append(1.5 * proc_time)
+        epsilon_send.append(0.3 * Tt)
 
-    matrix_tasks = generate_matrices()
-    matrix_tasks = generate_matrices()
-    compute_total_input_load()
+        matrix_tasks = generate_matrices()
+        matrix_tasks = generate_matrices()
+        compute_total_input_load()
 
     sched = {
     "Schedule-Based": schedule_based_distribution,
@@ -373,8 +370,10 @@ Time: {el:.2f}
         print(out)
         results += out + "\n"
 
-    for d in range(len(devices)):
-        save_result(d, results)
+    with open(RESULT_FILE, "w") as f:
+        f.write("===== Scheduler Evaluation (Server Side) =====\n\n")
+        f.write(results)
+
 
     for s in client_sockets.values():
         send_json(s, {"type": "EXPERIMENT_FINISHED"})
@@ -385,7 +384,7 @@ def reset_state():
 
     devices = []
     client_sockets = {}
-    device_result_files = {}
+    
 
 # ================= CLIENT HANDLER =================
 def handle_client(sock, addr):
@@ -401,8 +400,6 @@ def handle_client(sock, addr):
         info["ip"] = addr[0]
         devices.append(info)
         client_sockets[did] = sock
-        create_result_file(did, info["name"])
-
         last_connection_time = time.time()
 
 # ================= MONITOR =================
@@ -418,7 +415,7 @@ def monitor():
             continue
 
         # ⏱️ Check fixed 1-minute interval
-        if time.time() - last_prompt_time >= 30:
+        if time.time() - last_prompt_time >= 60:
 
             choice = input("Do you want to start Experiment (Y/N): ")
 
