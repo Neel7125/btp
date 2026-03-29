@@ -9,6 +9,26 @@ import numpy as np
 SERVER_IP = input("Enter server IP: ")
 PORT = int(input("Enter port: "))
 
+
+def compute_frame_processing_time():
+    # Step 1: Generate random 5x5 matrix
+    A = np.random.randint(1, 100, (5, 5))
+
+    start = time.time()
+
+    # Step 2: Transpose
+    A_T = A.T
+
+    # Step 3: Multiply
+    C = np.dot(A, A_T)
+
+    # Step 4: Determinant
+    _ = np.linalg.det(C)
+
+    end = time.time()
+
+    return end - start
+
 # ================= DEVICE INFO =================
 def get_device_name():
     try:
@@ -31,7 +51,7 @@ device_info = {
     "cores": psutil.cpu_count(),
     "memory": round(psutil.virtual_memory().total/(1024**3),2),
     "battery": get_battery(),
-    "frame_processing_time": 0.3
+    "frame_processing_time": compute_frame_processing_time()
 }
 
 # ================= SOCKET =================
