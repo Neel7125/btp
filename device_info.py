@@ -3,6 +3,7 @@ import json
 import time
 import psutil
 import platform
+import numpy as np
 
 FILE_PATH = "/data/data/com.termux/files/home//storage/dcim/lab/device_info.json"
 
@@ -47,6 +48,25 @@ def get_memory():
     except:
         return 2.0
 
+def compute_frame_processing_time():
+    # Step 1: Generate random 5x5 matrix
+    A = np.random.randint(1, 100, (5, 5))
+
+    start = time.time()
+
+    # Step 2: Transpose
+    A_T = A.T
+
+    # Step 3: Multiply
+    C = np.dot(A, A_T)
+
+    # Step 4: Determinant
+    _ = np.linalg.det(C)
+
+    end = time.time()
+
+    return end - start
+
 # ================= MAIN LOOP =================
 while True:
     data = {
@@ -55,7 +75,7 @@ while True:
         "cores": get_cores(),
         "memory": get_memory(),
         "battery": get_battery(),
-        "frame_processing_time": 0.3,
+        "frame_processing_time": compute_frame_processing_time(),
         "timestamp": time.time()
     }
 
