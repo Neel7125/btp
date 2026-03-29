@@ -12,9 +12,23 @@ from deap import base, creator, tools, algorithms
 RESULT_DIR = "./Result"
 os.makedirs(RESULT_DIR, exist_ok=True)
 
+# ================= INPUT SIZE =================
+FRAME_SIZE_MB = 32.6
+FRAME_SIZE_BITS = FRAME_SIZE_MB * 8 * 1024 * 1024
+
+Twin = []
+Twex = []
+TTproc = []
+Ttransmit = []
+
+epsilon_recv = []
+epsilon_proc = []
+epsilon_send = []
+
+MOVIE_DURATION_SECONDS = 10  # you can tune this
+
 devices = []
 client_sockets = {}
-device_capacities = {}
 device_result_files = {}
 
 matrix_tasks = []
@@ -57,8 +71,13 @@ def generate_matrices():
 
 # ================= RESULT =================
 def create_result_file(device_id, name):
-    path = os.path.join(RESULT_DIR, name.replace(" ", "_") + "_results.txt")
+    ip = devices[device_id]["ip"].replace(".", "_")
+
+    filename = f"{name.replace(' ', '_')}_{ip}_results.txt"
+    path = os.path.join(RESULT_DIR, filename)
+
     device_result_files[device_id] = path
+
     with open(path, "w") as f:
         f.write("===== Scheduler Evaluation =====\n\n")
 
@@ -67,63 +86,37 @@ def save_result(device_id, text):
         f.write(text + "\n")
 
 # ================= OBJECTIVE =================
-def compute_objectives(assign):
-    counts = Counter(assign)
-
-    times = []
-    energy = 0
-    util = []
+def compute_objectives(assignment):
+    device_times = [0.0] * NUM_DEVICES
+    energy = 0.0
+    utilizations = []
 
     for i in range(NUM_DEVICES):
-        n = counts.get(i, 0)
-        t = devices[i]["frame_processing_time"]
+        num_tasks = assignment.count(i)
 
-        Tc = n * t
-        Ec = n * t * 0.5
+        T_cij = num_tasks * (Twin[i] + Twex[i] + TTproc[i] + Ttransmit[i])
 
-        times.append(Tc)
-        energy += Ec
-        util.append(Tc / (TOTAL_FRAMES + 1))
+        E_ij = num_tasks * (
+            Twin[i] * epsilon_recv[i]
+            + TTproc[i] * epsilon_proc[i]
+            + Ttransmit[i] * epsilon_send[i]
+        )
 
-    comp = max(times)
-    avg = sum(util) / NUM_DEVICES
-    thr = TOTAL_FRAMES / comp if comp > 0 else 0
+        device_times[i] = T_cij
+        energy += E_ij
 
-    return comp, energy, avg, thr
+        utilizations.append(
+            T_cij / MOVIE_DURATION_SECONDS if MOVIE_DURATION_SECONDS else 0
+        )
 
-# ================= CAPACITY =================
-def capacity_scheduler():
-    assign = []
+    completion_time = max(device_times)
+    avg_util = sum(utilizations) / NUM_DEVICES
+    throughput = TOTAL_FRAMES / completion_time if completion_time > 0 else 0
 
-    for device_id in range(NUM_DEVICES):
-        count = device_capacities[device_id]
-        assign.extend([device_id] * count)
+    return completion_time, energy, avg_util, throughput
 
-    # shuffle for randomness
-    random.shuffle(assign)
 
-    return assign
 
-def compute_device_capacities():
-    scores = []
-
-    for d in devices:
-        cpu = d["cores"] * d["processor_speed"]
-        mem = d["memory"]
-        bat = max(d["battery"], 0) / 100
-
-        scores.append(0.5*cpu + 0.3*mem + 0.2*bat)
-
-    total = sum(scores)
-
-    caps = {}
-    for i, s in enumerate(scores):
-        caps[i] = int((s / total) * TOTAL_FRAMES)
-
-    while sum(caps.values()) < TOTAL_FRAMES:
-        caps[np.argmax(scores)] += 1
-
-    return caps
 
 def print_task_distribution(assign):
     from collections import Counter
@@ -167,30 +160,30 @@ def execute_assignment(assign):
         counts[did] += 1
 
 
-def capacity_based_scheduler():
-    assign = []
+def schedule_based_distribution():
+    assignment = []
 
-    for device_id in range(NUM_DEVICES):
-        count = device_capacities[device_id]
-        assign.extend([device_id] * count)
+    for i in range(TOTAL_FRAMES):
+        device_id = i % NUM_DEVICES   # round-robin scheduling
+        assignment.append(device_id)
 
-    # Shuffle so tasks are not sequentially grouped
-    random.shuffle(assign)
-
-    return assign
+    return assignment
 
 
 # ================= SCHEDULERS =================
 def greedy_scheduler():
-    load = [0]*NUM_DEVICES
-    assign = []
+    assignment = []
+    device_times = [0.0] * NUM_DEVICES
 
     for _ in range(TOTAL_FRAMES):
-        i = np.argmin(load)
-        assign.append(i)
-        load[i]+=1
+        idx = np.argmin(device_times)
+        assignment.append(idx)
 
-    return assign
+        device_times[idx] += (
+            Twin[idx] + Twex[idx] + TTproc[idx] + Ttransmit[idx]
+        )
+
+    return assignment
 
 # (KEEP YOUR PSO / MOPSO / GA SAME HERE)
 # ================= PSO =================
@@ -292,29 +285,76 @@ def mompso_ga_scheduler():
 
     return list(best)
 
+
+def compute_total_input_load():
+    matrix_size_bytes = FRAME_SIZE_BITS / 8
+    total_load = matrix_size_bytes * TOTAL_FRAMES
+
+    print(f"\n📦 Total Input Load: {total_load / (1024**3):.2f} GB")
+
 # ================= RUN =================
 def run_experiment():
-    global matrix_tasks, NUM_DEVICES, device_capacities
+    global matrix_tasks, NUM_DEVICES
+    global Twin, Twex, TTproc, Ttransmit
+    global epsilon_recv, epsilon_proc, epsilon_send
 
     print("\n🚀 Starting Experiment...\n")
 
     NUM_DEVICES = len(devices)
+
+    bandwidths = [54e6] * NUM_DEVICES
+
+    Ttransmit = [FRAME_SIZE_BITS / bw for bw in bandwidths]
+    TTproc = [
+        d["frame_processing_time"] * (1 + 0.2 * i)
+        for i, d in enumerate(devices)
+    ]
+
+    epsilon_send = [0.5] * NUM_DEVICES
+    epsilon_recv = [0.3] * NUM_DEVICES
+    epsilon_proc = [0.4] * NUM_DEVICES
+
+    Twin = [0.1] * NUM_DEVICES
+    Twex = [0.1] * NUM_DEVICES
+
+    for d in devices:
+        cpu = d["processor_speed"]
+        
+        # Faster CPU → lower processing time
+        proc_time = 1 / cpu
+
+        Twin.append(random.uniform(0.05, 0.2))
+        Twex.append(random.uniform(0.05, 0.2))
+        TTproc.append(proc_time)
+        Ttransmit.append(random.uniform(0.05, 0.2))
+
+        epsilon_recv.append(random.uniform(0.5, 1.5))
+        epsilon_proc.append(random.uniform(1.0, 2.0))
+        epsilon_send.append(random.uniform(0.5, 1.5))
+
     matrix_tasks = generate_matrices()
-    device_capacities = compute_device_capacities()
+    matrix_tasks = generate_matrices()
+    compute_total_input_load()
 
     sched = {
-        "Greedy": greedy_scheduler,
-        "PSO": pso_scheduler,
-        "MOPSO": mopso_scheduler,
-        "MOMPSO-GA": mompso_ga_scheduler
-    }
+    "Schedule-Based": schedule_based_distribution,
+    "Greedy": greedy_scheduler,
+    "PSO": pso_scheduler,
+    "MOPSO": mopso_scheduler,
+    "MOMPSO-GA": mompso_ga_scheduler
+}
 
     results = ""
 
     for name, fn in sched.items():
         st = time.time()
 
-        assign = capacity_scheduler()
+        result = fn()
+
+        if isinstance(result, tuple):
+            assign = result[0]
+        else:
+            assign = result
 
         print_task_distribution(assign)
 
@@ -358,6 +398,7 @@ def handle_client(sock, addr):
 
     with lock:
         did = len(devices)
+        info["ip"] = addr[0]
         devices.append(info)
         client_sockets[did] = sock
         create_result_file(did, info["name"])
@@ -405,10 +446,11 @@ def monitor():
 # ================= START =================
 def start_server():
     s = socket.socket()
-    s.bind(("0.0.0.0", 9090))
+    s.bind(("0.0.0.0", 7070))
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     s.listen(10)
 
-    print("Server running on 0.0.0.0 9090")
+    print("Server running on 0.0.0.0 7070")
 
     threading.Thread(target=monitor, daemon=True).start()
 
