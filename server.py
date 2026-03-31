@@ -7,6 +7,7 @@ import json
 import os
 from collections import Counter
 from deap import base, creator, tools, algorithms
+from concurrent.futures import ThreadPoolExecutor
 
 # ================= GLOBAL =================
 RESULT_DIR = "./Result"
@@ -158,15 +159,18 @@ def schedule_based_distribution():
 # ================= SCHEDULERS =================
 def greedy_scheduler():
     assignment = []
-    device_times = [0.0] * NUM_DEVICES
+    load = [0.0]*NUM_DEVICES
 
     for _ in range(TOTAL_FRAMES):
-        idx = np.argmin(device_times)
-        assignment.append(idx)
+        costs = []
 
-        device_times[idx] += (
-            Twin[idx] + Twex[idx] + TTproc[idx] + Ttransmit[idx]
-        )
+        for i in range(NUM_DEVICES):
+            base = devices[i]["frame_processing_time"]
+            costs.append(base + load[i]*0.5)
+
+        idx = np.argmin(costs)
+        assignment.append(idx)
+        load[idx] += costs[idx]
 
     return assignment
 
@@ -201,24 +205,25 @@ class Particle:
 
 
 def pso_scheduler():
+    swarm = [Particle() for _ in range(30)]
+    gbest = swarm[0].pos.copy()
+    gbest_fit = float("inf")
 
-    swarm = [Particle() for _ in range(10)]
+    for _ in range(30):
 
-    best = swarm[0].position.copy()
-    best_fit = float('inf')
+        # 🔥 parallel fitness
+        with ThreadPoolExecutor(max_workers=8) as ex:
+            fits = list(ex.map(lambda p: p.evaluate(), swarm))
 
-    for _ in range(10):
+        for p, f in zip(swarm, fits):
+            if f < gbest_fit:
+                gbest_fit = f
+                gbest = p.pos.copy()
 
         for p in swarm:
-            fit = p.evaluate()
-            if fit < best_fit:
-                best_fit = fit
-                best = p.position.copy()
+            p.update(gbest)
 
-        for p in swarm:
-            p.update(best)
-
-    return best.tolist()
+    return gbest.tolist()
 
 
 # ================= MOPSO =================
